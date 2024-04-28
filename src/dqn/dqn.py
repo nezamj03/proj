@@ -2,7 +2,6 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 from ..networks.mlp import MLP
-from ..utils.buffer import EpisodeBuffer
 from ..utils.schedule import REGISTRY as SCHEDULE_REGISTRY
 import numpy as np
 from ..agents.base import BaseAgent

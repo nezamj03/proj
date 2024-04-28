@@ -1,27 +1,47 @@
-# MLP Network Params
-activation: "relu"
-hidden_layers: [32, 32]
-
-# DQN Configuration
-state_size: 7
-action_size: 2
-lr: 0.002
+# PPO
 clip_param: 0.2
 update_epochs: 10
 
-# Buffer
-buffer:
-  buffer_size: 1000
-  required_keys: ['observations', 'actions', 'rewards', 'next_observations', 'dones', 'log_probs', 'values', 'action_masks']
+# Environment
+env_args:
+  num_players: 5
+  num_rounds: 5
+  to_select: 5
 
-# Runner
-batch_size: 128
-total_train_t: 500_000
-n_agents: 45
+# Logging
+save: True
+save_count: 1
+stats_freq: 20000
+
+# Network Configuration
+state_size: 5
+action_size: 2
+activation: "relu"
+hidden_layers: [16]
+
+# Epsilon Schedule
+epsilon_schedule_decay: "exponential"
+epsilon_start: 1
+epsilon_end: 0.8
+epsilon_anneal: 10000000
+
+# Learning Rate Schedule
+lr_schedule_decay: "linear"
+lr_start: 0.0001
+lr_end: 0.000005
+lr_anneal: 50_000
+
+# Learning
+batch_size: 256
+total_train_t: 200_000
 agents: "vs_always"
 gamma: 1
-learn_freq: 500
+learn_freq: 15
 
+# Buffer
+buffer:
+  buffer_size: 25_000
+  required_keys: ['observations', 'actions', 'rewards', 'next_observations', 'dones', 'log_probs', 'values', 'action_masks']
 
 # Environment
 env_args:
@@ -31,9 +51,9 @@ env_args:
 
 # Logging
 save: True
-save_count: 1
-stats_freq: 20000
-
+save_count: 5
+stats_freq: 100_000_000
+save_token: 'dummy'
 
 
   

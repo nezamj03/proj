@@ -4,6 +4,7 @@ from ..utils.buffer import TimestepBuffer
 from datetime import datetime
 from ..agents.random import RandomAgent
 from ..agents.always_offer import AlwaysOfferAgent
+import torch
 
 SAVE_PATH = 'res/'
 
@@ -82,7 +83,7 @@ class DQNRunner:
         
         return history
 
-    def train(self):
+    def train(self, test=False):
 
         self.logger.info("Starting Training")
 
@@ -94,8 +95,7 @@ class DQNRunner:
         while self.train_t <= self.total_train_t:
 
             # Run for a whole episode at a time
-            episode_batch = self.rollout(test=False)
-
+            episode_batch = self.rollout(test=test)
             self.episode += 1
 
             for agent in episode_batch:
@@ -119,7 +119,6 @@ class DQNRunner:
                 time = f'{datetime.now().strftime("%Y%m%d")}'
                 token = f'{self.config["save_token"]}'
                 save_path = os.path.join(SAVE_PATH, "models", "DQN", time, str(self.train_t), token)
-                print(save_path)
                 self.selected_learner[1].save(save_path)
                 self.logger.info(f"Saved DQN Model at t={self.train_t}/{self.total_train_t}")
 

@@ -1,6 +1,6 @@
 import numpy as np
 from .ppo import PPOAgent
-from ..utils.buffer import EpisodeBuffer
+from ..utils.buffer import TimestepBuffer
 from ..agents.random import RandomAgent
 from ..agents.always_offer import AlwaysOfferAgent
 from datetime import datetime 
@@ -14,8 +14,7 @@ class PPORunner:
         self.logger = logger
         self.batch_size = config['batch_size']
         self.total_train_t = config["total_train_t"]
-        self.total_eval_t = config.get("total_eval_t", 50_000)
-        self.n_agents = config["n_agents"]
+        self.n_agents = config["env_args"]["num_players"]
         self.env_fn = env_fn
 
     def setup(self):
@@ -23,6 +22,7 @@ class PPORunner:
         self.env = self.env_fn(**self.config['env_args'])
         self.env.reset()
         self.build_agents()
+        self.train_t = 0
 
     def build_agents(self):
         standard_learner = 'player_0'
@@ -43,7 +43,7 @@ class PPORunner:
             self.learners = set(self.agents.keys())
 
         self.replays = {
-            a : EpisodeBuffer(self.config['buffer']) for a in self.learners
+            a : TimestepBuffer(self.config['buffer']) for a in self.learners
         }
         self.selected_learner = standard_learner, self.agents[standard_learner]        
 
@@ -65,8 +65,7 @@ class PPORunner:
             }
         
         while self.env.agents:
-            actions = {}
-            log_probs = {}
+
             res = {agent : self.agents[agent].act(
                     state= obs[agent]["observation"], action_mask= obs[agent]["action_mask"]) 
                     for agent in self.env.agents}
@@ -121,6 +120,7 @@ class PPORunner:
                 for agent in self.learners:
                     if len(self.replays[agent]) > self.batch_size:
                         batch = self.replays[agent].sample(self.batch_size)
+                        self.agents[agent].set_lr(self.train_t)
                         self.agents[agent].learn(batch)
 
             if self.config['save'] and \
@@ -137,34 +137,3 @@ class PPORunner:
 
         self.logger.info("Finished Training")
         return episode_returns[self.selected_learner[0]]
-
-    def evaluate(self):
-
-        self.logger.info("Starting Evaluation")
-        
-        self.eval_t = 0
-        self.episode = 0
-
-        episode_returns = {agent : [] for agent in self.agents.keys()}
-
-        while self.eval_t <= self.total_eval_t:
-
-            episode_batch = self.rollout()
-            self.episode += 1
-
-            for agent in episode_batch:
-                episode_returns[agent].append(sum(episode_batch[agent]["rewards"]))
-
-            if self.config['save'] and \
-                    self.eval_t > 0 and \
-                    self.eval_t % (self.total_eval_t // self.config['count_save']):
-                token = f'{datetime.now().strftime("%Y%m%d")}'
-                save_path = os.path.join(SAVE_PATH, "models", "PPO", token, str(self.eval_t))
-                self.selected_learner[1].save(save_path)
-                self.logger.info(f"Saved DQN Model at t={self.eval_t}/{self.total_eval_t}")
-
-            # if self.train_t > 0 and self.train_t % self.config['stats_freq']:
-            #     self.logger.log_stat("episode", self.episode, self.train_t)
-            #     self.logger.print_recent_stats(episode_returns)
-
-        self.logger.info("Finished Training")

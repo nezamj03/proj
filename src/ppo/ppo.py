@@ -3,6 +3,7 @@ from ..networks.mlp import MLP
 import torch.optim as optim
 import torch.nn.functional as F
 import os
+from ..utils.schedule import REGISTRY as SCHEDULE_REGISTRY
 
 class PPOAgent:
     def __init__(self, config):
@@ -11,12 +12,16 @@ class PPOAgent:
         self.gamma = config.get('gamma', 0.99)
         self.clip_param = config.get('clip_param', 0.2)
         self.update_epochs = config.get('update_epochs', 5)
-        self.lr = config.get('lr', 0.0003)
-        
+        lr_schedule = SCHEDULE_REGISTRY[config.get('lr_schedule_decay', 'linear')]
+        self.lr_schedule = lr_schedule(config.get('lr_start', 0.002),
+                              config.get('lr_end', 0.001),
+                              config.get('lr_anneal', 100_000) )  
+             
         # Policy network (assumed MLP model)
         self.policy = MLP(self.state_size, self.action_size, config)
         self.critic = MLP(self.state_size, 1, config)
-        self.optimizer = optim.Adam(list(self.policy.parameters()) + list(self.critic.parameters()), lr=self.lr)
+        self.optimizer = optim.Adam(list(self.policy.parameters()) + list(self.critic.parameters()))
+        self.set_lr(0)
 
     def act(self, state, action_mask):
         state = torch.FloatTensor(state).unsqueeze(0)
@@ -33,36 +38,38 @@ class PPOAgent:
 
         return action.item(), log_prob, value.item()
 
-
+    def set_lr(self, time):
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = self.lr_schedule(time)
 
     def learn(self, batch):
+        obs = torch.stack([torch.FloatTensor(timestep['observations']) for timestep in batch])
+        actions = torch.LongTensor([timestep['actions'] for timestep in batch])
+        rewards = torch.FloatTensor([timestep['rewards'] for timestep in batch])
+        next_obs = torch.stack([torch.FloatTensor(timestep['next_observations']) for timestep in batch])
+        dones = torch.FloatTensor([timestep['dones'] for timestep in batch])
+        old_log_probs = torch.FloatTensor([timestep['log_probs'] for timestep in batch])
+        values = torch.FloatTensor([timestep['values'] for timestep in batch])
+        action_masks = torch.stack([torch.FloatTensor(timestep['action_masks']) for timestep in batch])
 
-        obs = torch.stack([torch.FloatTensor(state) for episode in batch for state in episode['observations']])
-        actions = torch.LongTensor([action for episode in batch for action in episode['actions']])
-        rewards = torch.FloatTensor([rewards for episode in batch for rewards in episode['rewards']])
-        next_obs = torch.stack([torch.FloatTensor(state) for episode in batch for state in episode['next_observations']])
-        dones = torch.FloatTensor([dones for episode in batch for dones in episode['dones']])
-        old_log_probs = torch.FloatTensor([log_probs for episode in batch for log_probs in episode['log_probs']])
-        values = torch.FloatTensor([values for episode in batch for values in episode['values']])
-        action_masks = torch.stack([torch.BoolTensor(mask) for episode in batch for mask in episode['action_masks']])
-
-        with torch.no_grad():  # Disable gradient computation for target value calculation
+        with torch.no_grad():
             next_values = self.critic(next_obs).detach().squeeze()
-            
-        # Calculate returns and advantages
+
         returns, advantages = self._calculate_advantages(rewards, dones, values, next_values)
 
         for _ in range(self.update_epochs):
-            # Recompute log_probs, values for the updated policy and critic
             logits = self.policy(obs)
-            logits = logits.masked_fill(action_masks == 0, float('-inf'))  # Apply the mask
+            logits = logits.masked_fill(action_masks == 0, float('-inf'))
             probs = F.softmax(logits, dim=-1)
             dist = torch.distributions.Categorical(probs)
             new_log_probs = dist.log_prob(actions)
 
+            # Calculate the entropy of the policy's action distribution
+            entropy = dist.entropy().mean()
+
             # Compute ratios
             ratio = (new_log_probs - old_log_probs).exp()
-
+            
             # Compute objective functions
             surr1 = ratio * advantages
             surr2 = torch.clamp(ratio, 1 - self.clip_param, 1 + self.clip_param) * advantages
@@ -70,13 +77,15 @@ class PPOAgent:
 
             critic_loss = F.mse_loss(values, returns)
 
-            # Total loss
-            loss = actor_loss + 0.5 * critic_loss
+            # Include the entropy in the loss
+            entropy_coefficient = 0.04  # This coefficient can be adjusted as per requirement
+            loss = actor_loss - entropy_coefficient * entropy + 0.5 * critic_loss  # Notice the "-" sign, we subtract entropy to maximize it
 
             # Backpropagation
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
+
 
     def _calculate_advantages(self, rewards, dones, values, next_values):
         deltas = rewards + self.gamma * next_values * (1 - dones) - values

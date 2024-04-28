@@ -1,0 +1,42 @@
+# Network Configuration
+state_size: 5
+action_size: 2
+activation: "relu"
+hidden_layers: [16]
+
+# Epsilon Schedule
+epsilon_schedule_decay: "exponential"
+epsilon_start: 0.01
+epsilon_end: 0.001
+epsilon_anneal: 1
+
+# Learning Rate Schedule
+lr_schedule_decay: "linear"
+lr_start: 0.00075
+lr_end: 0.0005
+lr_anneal: 100_000
+
+# Learning
+batch_size: 256
+total_train_t: 250_000
+agents: "vs_always"
+gamma: 1
+learn_freq: 15
+sync_freq: 2_500
+
+# Buffer
+buffer:
+  buffer_size: 25_000
+  required_keys: ['observations', 'actions', 'rewards', 'next_observations', 'dones']
+
+# Environment
+env_args:
+  num_players: 45
+  num_rounds: 5
+  to_select: 5
+
+# Logging
+save: True
+save_count: 1
+stats_freq: 100_000_000
+save_token: 'eval'
