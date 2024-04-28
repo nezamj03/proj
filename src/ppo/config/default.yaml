@@ -1,0 +1,39 @@
+# MLP Network Params
+activation: "relu"
+hidden_layers: [32, 32]
+
+# DQN Configuration
+state_size: 7
+action_size: 2
+lr: 0.002
+clip_param: 0.2
+update_epochs: 10
+
+# Buffer
+buffer:
+  buffer_size: 1000
+  required_keys: ['observations', 'actions', 'rewards', 'next_observations', 'dones', 'log_probs', 'values', 'action_masks']
+
+# Runner
+batch_size: 128
+total_train_t: 500_000
+n_agents: 45
+agents: "vs_always"
+gamma: 1
+learn_freq: 500
+
+
+# Environment
+env_args:
+  num_players: 45
+  num_rounds: 5
+  to_select: 5
+
+# Logging
+save: True
+save_count: 1
+stats_freq: 20000
+
+
+
+  
