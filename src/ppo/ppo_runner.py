@@ -1,101 +1,100 @@
-import numpy as np
+import os
+from datetime import datetime
 from .ppo import PPOAgent
 from ..utils.buffer import TimestepBuffer
 from ..agents.random import RandomAgent
 from ..agents.always_offer import AlwaysOfferAgent
-from datetime import datetime 
-import os
 
 SAVE_PATH = 'res/'
 
 class PPORunner:
+    """
+    Orchestrates the setup, execution, and training of PPO agents within a specified environment.
+    Supports different configurations of agent interactions and training regimes.
+
+    Attributes:
+        config (dict): Configuration settings for the runner and agents.
+        logger (Logger): Logger for recording training progress and statistics.
+        env_fn (callable): Function to initialize the environment.
+        agents (dict): Dictionary of agents participating in the environment.
+        learners (set): Set of agents that are learning (i.e., being trained).
+        replays (dict): Dictionary of replay buffers for learning agents.
+        selected_learner (tuple): Tuple containing the key and the instance of the primary learner.
+    """
     def __init__(self, env_fn, config, logger):
+        self.env_fn = env_fn
         self.config = config
         self.logger = logger
         self.batch_size = config['batch_size']
         self.total_train_t = config["total_train_t"]
         self.n_agents = config["env_args"]["num_players"]
-        self.env_fn = env_fn
+        self.setup()
 
     def setup(self):
-
+        """
+        Initializes the environment, agents, and any necessary variables.
+        """
         self.env = self.env_fn(**self.config['env_args'])
         self.env.reset()
         self.build_agents()
         self.train_t = 0
 
     def build_agents(self):
+        """
+        Initializes agents based on configuration for self-play or interaction with different types of agents.
+        """
         standard_learner = 'player_0'
-        if self.config['agents'] == 'self_play':
-            agent = PPOAgent(self.config)
-            self.agents = {a : agent for a in self.env.agents}
-            self.learners = set(self.agents.keys())
-        if self.config['agents'] == 'vs_random':
-            self.agents =  {a : RandomAgent() for a in self.env.agents}
-            self.agents[standard_learner] = PPOAgent(self.config)
-            self.learners = set([standard_learner])
-        if self.config['agents'] == 'vs_always':
-            self.agents = {a : AlwaysOfferAgent() for a in self.env.agents}
-            self.agents[standard_learner] = PPOAgent(self.config)
-            self.learners = set([standard_learner])
-        else:
-            self.agents = {a : PPOAgent(self.config) for a in self.env.agents}
-            self.learners = set(self.agents.keys())
-
-        self.replays = {
-            a : TimestepBuffer(self.config['buffer']) for a in self.learners
+        agent_configs = {
+            'self_play': (PPOAgent, self.env.agents),
+            'vs_random': (RandomAgent, self.env.agents.difference({standard_learner})),
+            'vs_always': (AlwaysOfferAgent, self.env.agents.difference({standard_learner}))
         }
-        self.selected_learner = standard_learner, self.agents[standard_learner]        
+        agent_class, non_learner_agents = agent_configs.get(self.config.get('agents', 'self_play'), (PPOAgent, self.env.agents))
+
+        self.agents = {agent: agent_class(self.config) if agent == standard_learner or agent_class == PPOAgent else agent_class()
+                       for agent in self.env.agents}
+        self.learners = {standard_learner} if agent_class != PPOAgent else self.env.agents
+        self.replays = {agent: TimestepBuffer(self.config['buffer']) for agent in self.learners}
+        self.selected_learner = standard_learner, self.agents[standard_learner]
 
     def rollout(self):
-
-        self.env = self.env_fn(**self.config['env_args'])
-        obs, infos = self.env.reset()
-        history = {
-            agent : {
-                'observations': [],
-                'actions': [],
-                'rewards': [],
-                'next_observations': [],
-                'dones': [],
-                'log_probs': [],
-                'values': [],
-                'action_masks': []
-                } for agent in self.learners
-            }
-        
+        """
+        Executes one complete episode of interaction in the environment.
+        """
+        obs, _ = self.env.reset()
+        history = {agent: {'observations': [], 'actions': [], 'rewards': [], 'next_observations': [], 'dones': [],
+                           'log_probs': [], 'values': [], 'action_masks': []} for agent in self.learners}
         while self.env.agents:
-
-            res = {agent : self.agents[agent].act(
-                    state= obs[agent]["observation"], action_mask= obs[agent]["action_mask"]) 
-                    for agent in self.env.agents}
             actions, log_probs, values = {}, {}, {}
-            
+            for agent in self.env.agents:
+                result = self.agents[agent].act(state=obs[agent]["observation"], action_mask=obs[agent]["action_mask"])
+                if agent in self.learners:
+                    actions[agent], log_probs[agent], values[agent] = result
+                else:
+                    actions[agent] = result
+
+            next_obs, rewards, terminations, truncations, _ = self.env.step(actions)
             for agent in self.env.agents:
                 if agent in self.learners:
-                    actions[agent] = res[agent][0]
-                    log_probs[agent] = res[agent][1]
-                    values[agent] = res[agent][2]
-                else:
-                    actions[agent] = res[agent]
-
-            next_obs, rewards, terminations, truncations, infos = self.env.step(actions)
-
-            for agent in infos.keys():
-                if agent in self.learners:
-                    history[agent]["observations"].append(obs[agent]["observation"])
-                    history[agent]["actions"].append(actions[agent])
-                    history[agent]["rewards"].append(rewards[agent])
-                    history[agent]["next_observations"].append(next_obs[agent]["observation"])
-                    history[agent]["dones"].append(terminations[agent] or truncations[agent])
-                    history[agent]["log_probs"].append(log_probs[agent])
-                    history[agent]["values"].append(values[agent])
-                    history[agent]["action_masks"].append(obs[agent]["action_mask"])
+                    self.update_history(history, agent, obs, actions, rewards, next_obs, terminations, truncations, log_probs, values)
 
             self.train_t += 1
             obs = next_obs
-        
         return history
+
+    def update_history(self, history, agent, obs, actions, rewards, next_obs, terminations, truncations, log_probs, values):
+        """
+        Updates the history dictionary with new timestep information for a given agent.
+        """
+        history[agent]["observations"].append(obs[agent]["observation"])
+        history[agent]["actions"].append(actions[agent])
+        history[agent]["rewards"].append(rewards[agent])
+        history[agent]["next_observations"].append(next_obs[agent]["observation"])
+        history[agent]["dones"].append(terminations[agent] or truncations[agent])
+        history[agent]["log_probs"].append(log_probs[agent])
+        history[agent]["values"].append(values[agent])
+        history[agent]["action_masks"].append(obs[agent]["action_mask"])
+
     
     def train(self):
 
